@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI 위험성평가 자동화</title>
+<!-- 보고서용 글꼴 (Noto Sans KR). 인터넷이 없으면 맑은 고딕으로 자동 대체됩니다. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
 <style>
   /* ─────────────────────────────────────────────
      국립생태원 연구출장 안전 — AI 위험성평가 v0.5
@@ -378,6 +382,8 @@
 
 </div>
 
+<!-- 관리자용 키 파일 (같은 폴더의 keys.js). 없어도 동작하며, 그 경우 아래 스크립트 상단의 값을 사용합니다. -->
+<script src="keys.js"></script>
 <script>
 /* ═══════════════════════════════════════════════
    ★ AI 연결 설정 (Make 없이 Gemini 직접 호출)
@@ -391,10 +397,13 @@
 /* Gemini 값은 GitHub 업로드 검사를 피하기 위해 앞·뒤 두 조각으로 나눠 적습니다.
    예: 전체가 AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 라면
        앞조각 "AIzaSyABCDEFGHIJKLMNOPQ"  /  뒷조각 "RSTUVWXYZ0123456789"  (나누는 위치는 아무 데나) */
-const GEMINI_KEY_A = "AQ.Ab8RN6KqFOA1aKc";   
-const GEMINI_KEY_B = "ZMBJ06QtTimJLbjsa2j0QFZrNjwBlAheSLw";   
+/* ▶ 권장: 값은 별도 파일 keys.js 에 넣어두면, 이후 index.html 을 새로 올릴 때마다 다시 넣지 않아도 됩니다.
+   (keys.js 가 없으면 아래 따옴표 안의 값을 사용합니다) */
+const _K = window.APP_KEYS || {};
+const GEMINI_KEY_A = _K.geminiA || "";   // 앞 조각
+const GEMINI_KEY_B = _K.geminiB || "";   // 뒷 조각
 const GEMINI_KEY = GEMINI_KEY_A + GEMINI_KEY_B;
-const KMA_KEY = "GDewDfD3UhYeNNlThaTbdu%2BYc8iCMapNVSlN9wblZeLXDLjOttYrPE3AY7YhEIRQ7E7B6r7a68h4rwUF8hsWFw%3D%3D";        // 
+const KMA_KEY = _K.kma || "";            // 공공데이터포털 일반 인증키(Decoding) — 통째로 넣어도 됩니다
 
 const GEMINI_MODEL = "gemini-3.6-flash";
 const ADMIN = /[?&]admin\b/.test(location.search);
@@ -875,6 +884,7 @@ ${m.extraRule ? '- ' + m.extraRule + '\n' : ''}- 반드시 아래 JSON 형식으
       const text = await callGemini(key, prompt, evaluationPhotoData.split(',')[1]);
       data = parseAiJson(text);
     }
+    await ensureFonts(JSON.stringify(data) + JSON.stringify(info));   // 보고서 글꼴 준비 후 그리기
     renderResult(data, info, evaluationPhoto);
   } catch (err) {
     alert('평가 중 문제가 생겼습니다.\n' + err.message + '\n\n잠시 후 다시 시도해주세요.');
@@ -973,6 +983,12 @@ function textList(value){
   if (Array.isArray(value)) return value.filter(v => typeof v === 'string').join(' · ');
   return typeof value === 'string' ? value : '';
 }
+/* 보호구·안전수칙을 글머리표 목록용 배열로 */
+function toItems(value){
+  if (Array.isArray(value)) return value.filter(v => typeof v === 'string' && v.trim()).map(v => v.trim());
+  if (typeof value === 'string' && value.trim()) return value.split(/\s*[·•]\s*|\n/).map(s => s.trim()).filter(Boolean);
+  return [];
+}
 function renderResult(data, info = readReportInfo(), evaluationPhoto = photoImg){
   const risks = normalizeRisks(data);
   lastRisks = risks;
@@ -982,7 +998,8 @@ function renderResult(data, info = readReportInfo(), evaluationPhoto = photoImg)
     ground:textList(data.ground) || '사진상 확인 불가',
     seasonal:textList(data.seasonal) || info.seasonalAuto || '해당 없음',
     ppe:textList(data.ppe) || '현장 확인 후 기재',
-    rules:textList(data.safety_rules) || '현장 확인 후 기재', photo:evaluationPhoto};
+    rules:textList(data.safety_rules) || '현장 확인 후 기재',
+    ppeItems:toItems(data.ppe), rulesItems:toItems(data.safety_rules), photo:evaluationPhoto};
   lastReportCanvas = buildReportCanvas(lastReport);
   const cv = document.getElementById('reportCanvas');
   cv.width = lastReportCanvas.width; cv.height = lastReportCanvas.height;
@@ -1007,126 +1024,276 @@ function renderResult(data, info = readReportInfo(), evaluationPhoto = photoImg)
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function esc(s){ return String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
-function wrapLines(ctx,text,maxWidth){
-  const lines=[]; let line='';
-  for(const char of String(text)){
-    if(char==='\n'){lines.push(line);line='';continue;}
-    if(line && ctx.measureText(line+char).width>maxWidth){
-      // 가능하면 단어(공백) 단위로 줄바꿈 — "습도 7 / 1%" 처럼 숫자·단어가 끊기는 것 방지
-      const sp=line.lastIndexOf(' ');
-      if(sp>0 && char!==' '){lines.push(line.slice(0,sp));line=line.slice(sp+1)+char;}
-      else{lines.push(line);line=char===' '?'':char;}
-    }
-    else line+=char;
-  }
-  lines.push(line); return lines;
+/* ═══════════════════════════════════════════════
+   보고서 그리기 (v0.7 — 정돈된 서식)
+   · 글꼴: Noto Sans KR(웹폰트) → 없으면 맑은 고딕
+   · 칸 안의 글자는 먼저 크기를 줄여 한 줄에 맞추고(최소 80%),
+     그래도 넘치면 낱말·점(·)·쉼표 위치에서만 줄을 나눕니다.
+═══════════════════════════════════════════════ */
+const ORG_NAME = "국립생태원 멸종위기종복원센터";   // 머리글 기관명 (비우면 표시 안 함)
+const FONT_STACK = '"Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+function fontStr(size, bold){ return (bold ? '700 ' : '400 ') + size + 'px ' + FONT_STACK; }
+
+/* 웹폰트가 실제로 내려받아진 뒤에 그리도록 대기 (보고서에 쓰일 글자 기준으로 필요한 조각만 받음) */
+async function ensureFonts(sample){
+  if (!document.fonts) return;
+  const s = (sample || '') + ' 현장 위험성평가 보고서 0123456789';
+  try { await Promise.all([document.fonts.load(fontStr(20, false), s), document.fonts.load(fontStr(20, true), s)]); } catch(e) {}
 }
-function buildReportCanvas(report = lastReport){
-  if(!report) throw new Error('먼저 평가를 완료해주세요.');
-  const out=document.createElement('canvas'), c=out.getContext('2d');
-  const W=1200,M=28,I=W-M*2,NAVY='#071d3e',RED='#c30008',INK='#24272c',LINE='#8b929c';
-  const info=report.info, risks=report.risks;
-  const font=(size,bold=false)=>{ c.font=(bold?'bold ':'')+size+'px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif'; };
-  const lines=(text,width,size,bold=false)=>{font(size,bold);return wrapLines(c,text,width);};
-  function render(draw){
-    c.textBaseline='top'; c.textAlign='left';
-    const rect=(x,y,w,h,fill,stroke)=>{if(!draw)return;c.fillStyle=fill;c.fillRect(x,y,w,h);if(stroke){c.strokeStyle=stroke;c.lineWidth=1;c.strokeRect(x,y,w,h);}};
-    function block(text,x,y,width,size=22,bold=false,color=INK,align='left'){
-      const wrapped=lines(text,width,size,bold), step=size*1.4;
-      if(draw){c.fillStyle=color;c.textAlign=align;wrapped.forEach((line,i)=>c.fillText(line,x+(align==='center'?width/2:0),y+i*step));c.textAlign='left';}
-      return wrapped.length*step;
+
+/* 낱말 단위 줄바꿈: 공백·가운뎃점·쉼표·빗금 뒤에서만 나누고, 한 낱말이 너무 길 때만 글자 단위 */
+function smartWrap(ctx, text, maxWidth){
+  const lines = [];
+  for (const para of String(text).split('\n')) {
+    const tokens = para.match(/[^\s·,\/]+[\s·,\/]*/g) || [para];
+    let line = '';
+    const flush = () => { lines.push(line.replace(/\s+$/, '')); line = ''; };
+    for (const tk of tokens) {
+      if (line && ctx.measureText(line + tk).width > maxWidth) flush();
+      if (!line && ctx.measureText(tk).width > maxWidth) {
+        let chunk = '';
+        for (const ch of tk) {
+          if (chunk && ctx.measureText(chunk + ch).width > maxWidth) { lines.push(chunk); chunk = ch; }
+          else chunk += ch;
+        }
+        line = chunk;
+      } else line += tk;
     }
-    function badge(no,x,y,r=21){
-      if(!draw)return;
-      c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.fillStyle=RED;c.fill();
-      c.strokeStyle='#fff';c.lineWidth=3;c.stroke();
-      font(r*1.35,true);c.fillStyle='#fff';c.textAlign='center';c.textBaseline='middle';
-      c.fillText(String(no),x,y+1);c.textBaseline='top';c.textAlign='left';
-    }
-    function section(label,y){
-      font(25,true);const width=Math.min(I,c.measureText(label).width+34);
-      rect(M,y,width,39,NAVY);block(label,M+17,y+5,width-34,25,true,'#fff');return y+46;
-    }
-    function cells(values,widths,y,size=21,header=false){
-      const height=Math.max(header?60:56,...values.map((v,i)=>lines(v,widths[i]-22,size,header).length*size*1.4+20));
-      let x=M;
-      values.forEach((v,i)=>{rect(x,y,widths[i],height,header?'#e8ecf2':'#fff',LINE);
-        const h=lines(v,widths[i]-22,size,header).length*size*1.4;
-        block(v,x+11,y+(height-h)/2,widths[i]-22,size,header,INK,'center');x+=widths[i];});
-      return y+height;
-    }
-    let y=22;
-    if(report.demo){rect(M,y,I,35,'#fff0cb');block('데모 예시 · 실제 사진 분석 결과가 아닙니다',M,y+5,I,19,true,'#825000','center');y+=45;}
-    const title=(info.target||'연구현장')+' 주요 위험요소';
-    y+=block(title,M,y,I,46,true,NAVY,'center')+12;
-    rect(0,y,W,4,RED);y+=14;
-    const sideW=310,gap=23,photoW=I-sideW-gap,photoX=M,sideX=M+photoW+gap;
-    const heights=risks.map(r=> Math.max(97,lines(r.factor,sideW-57,23,true).length*32.2+
-      lines(r.injury,sideW-57,19).length*26.6+lines(r.measure,sideW-57,18).length*25.2+23));
-    const photoH=Math.max(560,heights.reduce((a,b)=>a+b,0));
-    rect(photoX,y,photoW,photoH,'#eef0f2');
-    const photo=report.photo;
-    if(photo && photo.width && photo.height){
-      const scale=Math.min(photoW/photo.width,photoH/photo.height);
-      const pw=photo.width*scale,ph=photo.height*scale,px=photoX+(photoW-pw)/2,py=y+(photoH-ph)/2;
-      if(draw)c.drawImage(photo,px,py,pw,ph);
-      risks.filter(r=>r.box_2d).forEach(r=>{
-        const [y1,x1,y2,x2]=r.box_2d, radius=Math.min(22,pw/12,ph/12);
-        const bx=px+Math.max(radius+3,Math.min(pw-radius-3,(x1+x2)/2000*pw));
-        const by=py+Math.max(radius+3,Math.min(ph-radius-3,(y1+y2)/2000*ph));
-        badge(r.no,bx,by,radius);
-      });
-    }else block('현장 사진 없음',photoX+20,y+photoH/2-20,photoW-40,25,false,'#667080','center');
-    let sy=y;
-    if(!risks.length)block('위험요인 목록이 없습니다.\n현장 상태를 다시 확인하세요.',sideX,sy,sideW,23);
-    risks.forEach((r,i)=>{
-      badge(r.no,sideX+23,sy+26);
-      let ty=sy+7;
-      ty+=block(r.factor,sideX+57,ty,sideW-57,23,true)+3;
-      ty+=block(r.injury,sideX+57,ty,sideW-57,19)+2;
-      block(r.measure,sideX+57,ty,sideW-57,18);
-      sy+=heights[i];if(i<risks.length-1)rect(sideX,sy-4,sideW,1,'#bfc7d4');
-    });
-    y+=photoH+19;
-    if(risks.some(r=>!r.box_2d))y+=block('※ 위치 정보가 없는 항목은 사진에 번호를 표시하지 않았습니다.',M,y,I,18,false,'#5d6675')+9;
-    y=section(info.mode==='facility'?'현장작업 개요':'현장조사 개요',y);
-    const locationLabel=info.mode==='facility'?'작업장소':'연구장소';
-    const widths=[185,387,170,402];
-    const date=info.date?info.date.replace(/-/g,'. '):'미입력';
-    y=cells([locationLabel,info.location||'미입력',info.mode==='facility'?'작업일자':'조사일자',date],widths,y);
-    y=cells(['분류군·작업유형',info.workType||'미입력','참여인원',info.count?info.count+'명':'미입력'],widths,y);
-    y=cells(['작성자',info.name||'미입력','소속·팀',info.team||'미입력'],widths,y);
-    y+=18;y=section('현장여건',y);
-    const conditions=[['기상',info.weather||'미입력'],['지형·시설',report.terrain||'사진상 확인 불가'],['노면',report.ground||'사진상 확인 불가'],['계절 위험',report.seasonal||'해당 없음']];
-    const condW=I/4,condH=Math.max(96,...conditions.map(a=>lines(a[1],condW-28,21).length*29.4+51));
-    conditions.forEach((a,i)=>{const x=M+i*condW;rect(x,y,condW,condH,'#fff',LINE);block(a[0],x+14,y+11,condW-28,22,true,NAVY);block(a[1],x+14,y+44,condW-28,21);});
-    y+=condH+18;y=section('위험성 평가 및 안전조치',y);
-    const tw=[252,154,112,112,178,336];
-    y=cells(['주요 위험요인','예상 재해','발생가능성\n(빈도)','피해심각성\n(강도)','위험성\n(점수·등급)','안전조치'],tw,y,17,true);
-    risks.forEach(r=>{
-      const vals=[r.no+'. '+r.factor,r.injury,String(r.freq),String(r.sev),r.score+'점 · '+r.j.txt,r.measure];
-      const rowH=Math.max(62,...vals.map((v,i)=>lines(v,tw[i]-22,21).length*29.4+22));
-      let x=M;
-      vals.forEach((v,i)=>{rect(x,y,tw[i],rowH,'#fff',LINE);
-        if(i===4){const color=r.j.cls==='high'?RED:r.j.cls==='mid'?'#f58a00':'#247446';
-          rect(x+12,y+rowH/2-20,tw[i]-24,40,color);block(v,x+12,y+rowH/2-15,tw[i]-24,22,true,'#fff','center');
-        }else{const h=lines(v,tw[i]-22,21).length*29.4;block(v,x+11,y+(rowH-h)/2,tw[i]-22,21,false,INK,i===0||i===5?'left':'center');}x+=tw[i];});
-      y+=rowH;
-    });
-    if(!risks.length)y=cells(['확인된 위험요인이 없습니다. 현장 재확인이 필요합니다.'],[I],y);
-    y+=9;y+=block('※ 위험성 = 빈도(1~4) × 강도(1~5)  |  1~2 낮음 · 3~7 보통 · 8~20 높음',M,y,I,19)+15;
-    const bottomW=(I-20)/2;
-    const blocks=[['필요 보호구',report.ppe],['현장 안전수칙',report.rules]];
-    const bottomH=Math.max(136,...blocks.map(a=>lines(a[1],bottomW-32,23).length*32.2+70));
-    blocks.forEach((a,i)=>{const x=M+i*(bottomW+20);rect(x,y,bottomW,bottomH,'#fff',LINE);rect(x,y,bottomW,42,NAVY);
-      block(a[0],x+12,y+7,bottomW-24,25,true,'#fff','center');block(a[1],x+16,y+57,bottomW-32,23);});
-    y+=bottomH+15;
-    if(report.summary)y+=block('평가 요약: '+report.summary,M,y,I,20,false,'#34435c')+12;
-    y+=block('※ AI가 제안한 참고용 평가입니다. 현장 확인과 담당자 검토 후 안전조치를 결정하세요.',M,y,I,18,false,'#636d7b');
-    return Math.ceil(y+M);
+    flush();
   }
-  out.width=W;out.height=render(false);
-  c.fillStyle='#fff';c.fillRect(0,0,W,out.height);render(true);return out;
+  return lines;
+}
+/* 글자 맞춤: {size, lines} 반환 */
+function fitLines(ctx, text, maxWidth, size, bold, opt = {}){
+  const minScale = opt.minScale == null ? 0.8 : opt.minScale;
+  const maxLines = opt.maxLines || 99;
+  const t = String(text == null ? '' : text);
+  ctx.font = fontStr(size, bold);
+  if (!t.includes('\n')) {
+    const w = ctx.measureText(t).width;
+    if (w <= maxWidth) return { size, lines: [t] };
+    if (maxWidth / w >= minScale) return { size: Math.floor(size * (maxWidth / w) * 10) / 10 - 0.1, lines: [t] };
+  }
+  let sz = size;
+  for (;;) {
+    ctx.font = fontStr(sz, bold);
+    const lines = smartWrap(ctx, t, maxWidth);
+    if (lines.length <= maxLines || sz <= size * minScale) return { size: sz, lines };
+    sz = Math.round((sz - 0.5) * 10) / 10;
+  }
+}
+/* 이전 버전 호환용 */
+function wrapLines(ctx, text, maxWidth){ return smartWrap(ctx, text, maxWidth); }
+
+function buildReportCanvas(report = lastReport){
+  if (!report) throw new Error('먼저 평가를 완료해주세요.');
+  const out = document.createElement('canvas'), c = out.getContext('2d');
+  const W = 1240, M = 44, I = W - M * 2;
+  const NAVY = '#1F3A5F', INK = '#1A202C', GRAY = '#5A6577', LINE = '#C9D1DC', LABEL = '#F2F4F7', ZEBRA = '#F8FAFC', RED = '#C53030';
+  const GRADE = {
+    high: { bg: '#FDE2E2', fg: '#9B2C2C', txt: '높음' },
+    mid:  { bg: '#FEEBC8', fg: '#7B341E', txt: '보통' },
+    low:  { bg: '#D8F3E3', fg: '#22543D', txt: '낮음' }
+  };
+  const info = report.info, risks = report.risks;
+  const isFac = info.mode === 'facility';
+  const overall = risks.length ? judge(Math.max(...risks.map(r => r.score))).cls : 'low';
+  const dateTxt = info.date ? info.date.replace(/-/g, '. ') : '미입력';
+
+  function render(draw){
+    c.textBaseline = 'top'; c.textAlign = 'left';
+    function path(x, y, w, h, r){
+      c.beginPath();
+      if (!r) { c.rect(x, y, w, h); return; }
+      c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+      c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+    }
+    function rect(x, y, w, h, fill, stroke, r){
+      if (!draw) return;
+      path(x, y, w, h, r || 0);
+      if (fill) { c.fillStyle = fill; c.fill(); }
+      if (stroke) { c.strokeStyle = stroke; c.lineWidth = 1; c.stroke(); }
+    }
+    /* 글자 그리기(또는 높이만 계산). 반환: 차지한 높이 */
+    function text(str, x, y, w, size, o = {}){
+      const f = fitLines(c, str, w, size, !!o.bold, { minScale: o.minScale, maxLines: o.maxLines });
+      const lh = f.size * (o.lh || 1.45);
+      if (draw) {
+        c.font = fontStr(f.size, !!o.bold); c.fillStyle = o.color || INK; c.textAlign = o.align || 'left';
+        const ax = o.align === 'center' ? x + w / 2 : o.align === 'right' ? x + w : x;
+        f.lines.forEach((ln, i) => c.fillText(ln, ax, y + i * lh + (lh - f.size) / 2));
+        c.textAlign = 'left';
+      }
+      return f.lines.length * lh;
+    }
+    const textH = (str, w, size, o = {}) => {
+      const f = fitLines(c, str, w, size, !!o.bold, { minScale: o.minScale, maxLines: o.maxLines });
+      return f.lines.length * f.size * (o.lh || 1.45);
+    };
+    function pillW(label, size){ c.font = fontStr(size, true); return c.measureText(label).width + size * 1.8; }
+    function pill(x, y, label, cls, size){
+      const g = GRADE[cls] || GRADE.low, w = pillW(label, size), h = size * 1.7;
+      rect(x, y, w, h, g.bg, null, h / 2);
+      if (draw) { c.font = fontStr(size, true); c.fillStyle = g.fg; c.textAlign = 'center'; c.fillText(label, x + w / 2, y + (h - size) / 2); c.textAlign = 'left'; }
+      return { w, h };
+    }
+    function badge(no, x, y, r){
+      if (!draw) return;
+      c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fillStyle = RED; c.fill();
+      c.strokeStyle = '#fff'; c.lineWidth = Math.max(2, r * 0.16); c.stroke();
+      c.font = fontStr(r * 1.25, true); c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(String(no), x, y + r * 0.05); c.textBaseline = 'top'; c.textAlign = 'left';
+    }
+    function section(label, y){
+      rect(M, y + 5, 5, 22, NAVY);
+      text(label, M + 16, y, I - 16, 23, { bold: true, color: NAVY });
+      return y + 42;
+    }
+
+    let y = M - 4;
+    if (report.demo) {
+      rect(M, y, I, 34, '#FFF4D6', null, 6);
+      text('데모 예시 · 실제 사진 분석 결과가 아닙니다', M, y + 6, I, 17, { bold: true, color: '#7B5A00', align: 'center' });
+      y += 46;
+    }
+    /* ── 머리글 ── */
+    const rightW = 340, leftW = I - rightW - 24, rx = M + leftW + 24;
+    let hy = y;
+    if (ORG_NAME) hy += text(ORG_NAME + ' · ' + (isFac ? '시설관리 안전' : '연구조사 안전'), M, hy, leftW, 16, { color: GRAY }) + 2;
+    hy += text('현장 위험성평가 보고서', M, hy, leftW, 38, { bold: true, color: NAVY, lh: 1.3 }) + 2;
+    hy += text((info.target || '평가대상 미입력') + (info.location ? ' · ' + info.location : ''), M, hy, leftW, 20, { color: '#2D3748', maxLines: 2 });
+    let ry = y + 6;
+    ry += text((isFac ? '작업일 ' : '조사일 ') + dateTxt, rx, ry, rightW, 16, { color: GRAY, align: 'right' }) + 2;
+    ry += text((info.team || '소속 미입력') + ' · ' + (info.name || '작성자 미입력'), rx, ry, rightW, 16, { color: GRAY, align: 'right' }) + 12;
+    const ol = '종합 위험도 ' + GRADE[overall].txt, ow = pillW(ol, 17);
+    const op = pill(M + I - ow, ry, ol, overall, 17);
+    ry += op.h;
+    y = Math.max(hy, ry) + 14;
+    rect(M, y, I, 3, NAVY); y += 22;
+
+    /* ── 사진 + 위험요인 목록 ── */
+    const sideW = 392, gap = 24, photoW = I - sideW - gap, sideX = M + photoW + gap;
+    const itemH = risks.map(r => textH(r.factor, sideW - 54, 21, { bold: true, maxLines: 2 }) + Math.max(textH(r.injury, sideW - 54 - 118, 16), 27) + 24);
+    const photoH = Math.max(520, itemH.reduce((a, b) => a + b, 0));
+    rect(M, y, photoW, photoH, LABEL, null, 10);
+    const photo = report.photo;
+    if (photo && photo.width && photo.height) {
+      const sc = Math.min(photoW / photo.width, photoH / photo.height);
+      const pw = photo.width * sc, ph = photo.height * sc, px = M + (photoW - pw) / 2, py = y + (photoH - ph) / 2;
+      if (draw) { c.save(); path(px, py, pw, ph, 10); c.clip(); c.drawImage(photo, px, py, pw, ph); c.restore(); }
+      risks.filter(r => r.box_2d).forEach(r => {
+        const [y1, x1, y2, x2] = r.box_2d, rad = Math.min(21, pw / 12, ph / 12);
+        const bx = px + Math.max(rad + 3, Math.min(pw - rad - 3, (x1 + x2) / 2000 * pw));
+        const by = py + Math.max(rad + 3, Math.min(ph - rad - 3, (y1 + y2) / 2000 * ph));
+        badge(r.no, bx, by, rad);
+      });
+    } else text('현장 사진 없음', M, y + photoH / 2 - 14, photoW, 22, { color: GRAY, align: 'center' });
+    let sy = y;
+    if (!risks.length) text('확인된 위험요인이 없습니다.\n현장 상태를 다시 확인하세요.', sideX, sy, sideW, 20, { color: GRAY });
+    risks.forEach((r, i) => {
+      let ty = sy + 8;
+      badge(r.no, sideX + 18, ty + 14, 17);
+      ty += text(r.factor, sideX + 54, ty, sideW - 54, 21, { bold: true, maxLines: 2 }) + 3;
+      const p = pill(sideX + sideW - pillW(r.score + '점 ' + r.j.txt, 14), ty, r.score + '점 ' + r.j.txt, r.j.cls, 14);
+      text(r.injury, sideX + 54, ty + (p.h - 16 * 1.45) / 2, sideW - 54 - p.w - 10, 16, { color: GRAY });
+      sy += itemH[i];
+      if (i < risks.length - 1) rect(sideX, sy - 1, sideW, 1, LINE);
+    });
+    y += photoH + 18;
+    if (risks.some(r => !r.box_2d)) y += text('※ 위치 정보가 없는 항목은 사진에 번호를 표시하지 않았습니다.', M, y, I, 15, { color: GRAY }) + 6;
+
+    /* ── 개요 표 ── */
+    y = section(isFac ? '현장작업 개요' : '현장조사 개요', y);
+    const cw = [I * 0.15, I * 0.35, I * 0.15, I * 0.35], rh = 48;
+    const rows = [
+      [isFac ? '작업 장소' : '조사 장소', info.location || '미입력', isFac ? '작업 일자' : '조사 일자', dateTxt],
+      [isFac ? '작업 유형' : '조사 유형', info.workType || '미입력', '참여 인원', info.count ? info.count + '명' : '미입력'],
+      ['작성자', info.name || '미입력', '소속·팀', info.team || '미입력']
+    ];
+    rows.forEach(vals => {
+      let x = M;
+      vals.forEach((v, i) => {
+        const isK = i % 2 === 0;
+        rect(x, y, cw[i], rh, isK ? LABEL : '#fff', LINE);
+        const h = textH(v, cw[i] - 24, isK ? 16 : 18, { minScale: 0.72, maxLines: 1 });
+        text(v, x + 12, y + (rh - h) / 2, cw[i] - 24, isK ? 16 : 18, { color: isK ? GRAY : INK, minScale: 0.72, maxLines: 1 });
+        x += cw[i];
+      });
+      y += rh;
+    });
+
+    /* ── 현장 여건 ── */
+    y += 16; y = section('현장 여건', y);
+    const conds = [
+      ['기상', info.weather || '미입력'],
+      ['지형·시설', report.terrain || '사진상 확인 불가'],
+      ['노면', report.ground || '사진상 확인 불가'],
+      ['계절 위험', report.seasonal || '해당 없음']
+    ];
+    const tg = 12, tw = (I - tg * 3) / 4;
+    const th = Math.max(92, ...conds.map(a => 44 + textH(a[1], tw - 26, 17, { maxLines: 4 }) + 14));
+    conds.forEach((a, i) => {
+      const x = M + i * (tw + tg);
+      rect(x, y, tw, th, '#fff', LINE, 8);
+      text(a[0], x + 13, y + 11, tw - 26, 15, { bold: true, color: GRAY });
+      text(a[1], x + 13, y + 40, tw - 26, 17, { maxLines: 4 });
+    });
+    y += th + 16;
+
+    /* ── 평가표 ── */
+    y = section('위험성 평가 및 안전조치', y);
+    const tc = [52, 288, 188, 78, 78, 148]; tc.push(I - tc.reduce((a, b) => a + b, 0));
+    const heads = ['No', '위험요인', '예상 재해', '빈도', '강도', '위험성', '안전조치'];
+    const hh = 46; let x = M;
+    heads.forEach((h, i) => { rect(x, y, tc[i], hh, NAVY, NAVY); text(h, x + 10, y + (hh - 16 * 1.45) / 2, tc[i] - 20, 16, { bold: true, color: '#fff', align: 'center' }); x += tc[i]; });
+    y += hh;
+    risks.forEach((r, i) => {
+      const cells = [String(r.no), r.factor, r.injury, String(r.freq), String(r.sev), '', r.measure];
+      const opts = [
+        { align: 'center', size: 17 }, { size: 17, minScale: 0.75, maxLines: 2 }, { size: 17, minScale: 0.75, maxLines: 2 },
+        { align: 'center', size: 17 }, { align: 'center', size: 17 }, null, { size: 15, color: '#2D3748' }
+      ];
+      const hs = cells.map((v, k) => opts[k] ? textH(v, tc[k] - 22, opts[k].size, opts[k]) : 30);
+      const rowH = Math.max(54, ...hs) + 18;
+      let cx = M;
+      cells.forEach((v, k) => {
+        rect(cx, y, tc[k], rowH, i % 2 ? ZEBRA : '#fff', LINE);
+        if (k === 5) { const lb = r.score + '점 ' + r.j.txt, w = pillW(lb, 15); pill(cx + (tc[k] - w) / 2, y + (rowH - 15 * 1.7) / 2, lb, r.j.cls, 15); }
+        else text(v, cx + 11, y + (rowH - hs[k]) / 2, tc[k] - 22, opts[k].size, opts[k]);
+        cx += tc[k];
+      });
+      y += rowH;
+    });
+    if (!risks.length) { rect(M, y, I, 54, '#fff', LINE); text('확인된 위험요인이 없습니다. 현장 재확인이 필요합니다.', M, y + 16, I, 17, { color: GRAY, align: 'center' }); y += 54; }
+    y += 8; y += text('위험성 = 빈도(1~4) × 강도(1~5)  ·  1~2 낮음  ·  3~7 보통  ·  8~20 높음', M, y, I, 14, { color: GRAY }) + 14;
+
+    /* ── 보호구 · 안전수칙 ── */
+    const bw = (I - 20) / 2, bh0 = 40;
+    const panels = [['필요 보호구', report.ppeItems || []], ['현장 안전수칙', report.rulesItems || []]];
+    const listH = items => items.reduce((a, s) => a + textH(s, bw - 46, 17) + 6, 0);
+    const bh = Math.max(120, ...panels.map(p => bh0 + 14 + listH(p[1].length ? p[1] : ['현장 확인 후 기재']) + 10));
+    panels.forEach((p, i) => {
+      const x = M + i * (bw + 20);
+      rect(x, y, bw, bh, '#fff', LINE, 8);
+      if (draw) { c.save(); path(x, y, bw, bh, 8); c.clip(); c.fillStyle = NAVY; c.fillRect(x, y, bw, bh0); c.restore(); }
+      text(p[0], x + 16, y + (bh0 - 17 * 1.45) / 2, bw - 32, 17, { bold: true, color: '#fff' });
+      let ly = y + bh0 + 14;
+      (p[1].length ? p[1] : ['현장 확인 후 기재']).forEach(s => {
+        if (draw) { c.fillStyle = NAVY; c.beginPath(); c.arc(x + 24, ly + 12, 3, 0, Math.PI * 2); c.fill(); }
+        ly += text(s, x + 36, ly, bw - 46, 17) + 6;
+      });
+    });
+    y += bh + 18;
+
+    /* ── 맺음 ── */
+    if (report.summary) y += text('평가 요약  ' + report.summary, M, y, I, 16, { color: '#2D3748' }) + 8;
+    rect(M, y, I, 1, LINE); y += 10;
+    y += text('AI가 제안한 참고용 평가입니다. 현장 확인과 담당자 검토 후 안전조치를 확정하세요.', M, y, I, 14, { color: GRAY });
+    return Math.ceil(y + M);
+  }
+  out.width = W; out.height = render(false);
+  c.fillStyle = '#fff'; c.fillRect(0, 0, W, out.height); render(true);
+  return out;
 }
 document.getElementById('btnSave').addEventListener('click',function(){
   if(!lastReportCanvas)return;
