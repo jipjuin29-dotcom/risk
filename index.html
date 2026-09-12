@@ -364,7 +364,10 @@
       <button type="button" id="btnBack">← 입력 수정</button>
       <button type="button" id="btnSave" class="primary">보고서 이미지 저장</button>
       <button type="button" id="btnPrint">인쇄 / PDF 저장</button>
+      <button type="button" id="btnShare" style="background:#fee500; color:#3c1e1e; border-color:#f5d800;">💬 카카오톡 등으로 공유</button>
+      <button type="button" id="btnSubmit" style="display:none; background:#2f855a; color:#fff; border-color:#2f855a;">📨 안전관리자 제출</button>
     </div>
+    <p class="report-help" id="submitState" style="display:none; color:#276749; font-weight:bold;"></p>
     <p class="report-help">사진의 번호는 오른쪽 설명과 아래 평가표의 번호에 대응합니다. 작은 화면에서는 확대하거나 아래 텍스트 결과를 열어 확인하세요.</p>
     <div class="report-paper">
       <canvas id="reportCanvas" role="img" aria-label="위험성평가 보고서"></canvas>
@@ -404,6 +407,8 @@ const GEMINI_KEY_A = _K.geminiA || "";   // 앞 조각
 const GEMINI_KEY_B = _K.geminiB || "";   // 뒷 조각
 const GEMINI_KEY = GEMINI_KEY_A + GEMINI_KEY_B;
 const KMA_KEY = _K.kma || "";            // 공공데이터포털 일반 인증키(Decoding) — 통째로 넣어도 됩니다
+const SUBMIT_WEBHOOK = _K.submitWebhook || "";   // Make 웹훅 주소 (keys.js) — 있으면 [제출] 버튼 표시
+const SUBMIT_TOKEN = _K.submitToken || "";
 
 const GEMINI_MODEL = "gemini-3.6-flash";
 const ADMIN = /[?&]admin\b/.test(location.search);
@@ -1307,6 +1312,91 @@ document.getElementById('btnPrint').addEventListener('click',async function(){
   const img=document.getElementById('printReport');
   try{await img.decode();window.print();}catch(error){alert('인쇄 이미지를 준비하지 못했습니다. 이미지 저장을 이용해주세요.');}
 });
+/* ── 💬 공유: 휴대폰의 공유 창을 열어 보고서 이미지를 카카오톡 채널·단체방 등으로 직접 보냄 ── */
+function reportFileName(ext){
+  const title = (lastReport.info.target || '현장').replace(/[\\/:*?"<>|]/g, '_');
+  return '위험성평가_' + title + '_' + (lastReport.info.date || '결과') + '.' + ext;
+}
+document.getElementById('btnShare').addEventListener('click', async function(){
+  if (!lastReport || !lastReportCanvas) return;
+  const blob = await new Promise(r => lastReportCanvas.toBlob(r, 'image/png'));
+  const file = new File([blob], reportFileName('png'), { type: 'image/png' });
+  const info = lastReport.info;
+  const text = '[현장 위험성평가] ' + (info.target || '') + (info.location ? ' · ' + info.location : '')
+    + ' / ' + (info.team || '') + ' ' + (info.name || '') + ' / ' + (info.date || '');
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: '현장 위험성평가 보고서', text }); }
+    catch (e) { if (e.name !== 'AbortError') alert('공유 창을 열지 못했습니다.\n[보고서 이미지 저장] 후 카카오톡에서 직접 보내주세요.'); }
+  } else {
+    alert('이 브라우저에서는 바로 공유가 되지 않습니다.\n[보고서 이미지 저장]을 누른 뒤, 저장된 이미지를 카카오톡에서 직접 보내주세요.\n(휴대폰 크롬·사파리에서는 바로 공유가 됩니다)');
+  }
+});
+
+/* ── 📨 제출: 보고서 내용 + 이미지(JPG, 190KB 이하)를 Make 웹훅으로 전송 → Make가 솔라피로 문자 발송 ── */
+function reportJpeg(maxBytes){
+  let w = Math.min(1000, lastReportCanvas.width), q = 0.82, last = null;
+  for (let i = 0; i < 10; i++) {
+    const c = document.createElement('canvas'), s = w / lastReportCanvas.width;
+    c.width = w; c.height = Math.round(lastReportCanvas.height * s);
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(lastReportCanvas, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', q), b64 = url.slice(url.indexOf(',') + 1);
+    last = { base64: b64, bytes: Math.round(b64.length * 3 / 4), width: c.width, height: c.height };
+    if (last.bytes <= maxBytes) return last;
+    if (q > 0.6) q -= 0.08; else w = Math.round(w * 0.85);
+  }
+  return last;
+}
+function buildSubmitPayload(){
+  const r = lastReport, info = r.info;
+  const maxScore = r.risks.length ? Math.max(...r.risks.map(x => x.score)) : 0;
+  const overall = judge(maxScore).txt;
+  const img = reportJpeg(190 * 1024);
+  const date = info.date || todayLocal();
+  const lines = [
+    '[현장 위험성평가 제출]',
+    (info.target || '평가대상 미입력') + (info.location ? ' · ' + info.location : ''),
+    '작성 ' + (info.team || '소속 미입력') + ' ' + (info.name || '') + ' · ' + date.replace(/-/g, '.') + (info.count ? ' · ' + info.count + '명' : ''),
+    '종합 위험도 ' + overall + ' (최고 ' + maxScore + '점)',
+    ...r.risks.slice(0, 5).map(x => x.no + '. ' + x.factor + ' - ' + x.score + '점 ' + x.j.txt),
+    '기상 ' + (info.weather || '미입력'),
+    '※ AI 참고용 평가 · 담당자 검토 필요'
+  ];
+  return {
+    token: SUBMIT_TOKEN, app: 'risk-report', sentAt: new Date().toISOString(),
+    target: info.target, location: info.location, name: info.name, team: info.team, date,
+    count: info.count, workType: info.workType, weather: info.weather, mode: info.mode,
+    overall, maxScore, summary: r.summary,
+    terrain: r.terrain, ground: r.ground, seasonal: r.seasonal,
+    ppe: (r.ppeItems || []).join(', '), rules: (r.rulesItems || []).join(', '),
+    risks: r.risks.map(x => ({ no: x.no, factor: x.factor, injury: x.injury, freq: x.freq, sev: x.sev, score: x.score, grade: x.j.txt, measure: x.measure })),
+    messageText: lines.join('\n'),
+    imageBase64: img ? img.base64 : '', imageMime: 'image/jpeg', imageBytes: img ? img.bytes : 0,
+    imageName: '위험성평가_' + date + '.jpg'
+  };
+}
+document.getElementById('btnSubmit').addEventListener('click', async function(){
+  if (!lastReport || !lastReportCanvas) return;
+  if (!SUBMIT_WEBHOOK) { alert('제출 주소가 설정되지 않았습니다. 관리자에게 문의하세요.'); return; }
+  if (lastReport.demo && !confirm('데모 결과입니다. 그래도 제출할까요?')) return;
+  if (!confirm('이 보고서를 안전관리자에게 제출할까요?\n(보고서 이미지와 요약이 문자로 발송됩니다)')) return;
+  const btn = this, st = document.getElementById('submitState');
+  btn.disabled = true; btn.textContent = '⏳ 제출 중…'; st.style.display = 'none';
+  try {
+    const payload = buildSubmitPayload();
+    const res = await fetch(SUBMIT_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const txt = await res.text().catch(() => '');
+    if (!res.ok) throw new Error('서버 응답 ' + res.status + (txt ? ' · ' + txt.slice(0, 120) : ''));
+    st.textContent = '✅ 제출되었습니다 (' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) + ')' + (txt && txt !== 'Accepted' ? ' · ' + txt.slice(0, 80) : '');
+    st.style.display = 'block';
+    btn.textContent = '📨 다시 제출';
+  } catch (e) {
+    alert('제출하지 못했습니다.\n' + e.message + '\n\n인터넷 연결을 확인하고 다시 시도해주세요. 계속 실패하면 [보고서 이미지 저장] 후 직접 전달해주세요.');
+    btn.textContent = '📨 안전관리자 제출';
+  } finally { btn.disabled = false; }
+});
+if (SUBMIT_WEBHOOK) document.getElementById('btnSubmit').style.display = '';
+
 document.getElementById('btnBack').addEventListener('click',function(){
   document.querySelector('.wrap').classList.remove('result-view');
   document.getElementById('resultArea').style.display='none';
